@@ -1,0 +1,662 @@
+// Live POC schema – Tier 1 models only. Tier 2/3 models are documented in docs/schema.prisma.md
+// and are intentionally NOT present here.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Identity & tenancy ──────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships  WorkspaceMember[]
+  icpProfiles  IcpProfile[]  @relation("icpCreatedBy")
+  reviewedMsgs Message[]     @relation("reviewedBy")
+  workflowRuns WorkflowRun[] @relation("triggeredBy")
+
+  @@map("users")
+}
+
+model Workspace {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  // Provider selection for the POC. Credentials come from environment variables.
+  // { aiProviderKey, enrichmentProviderKey, outboundProviderKey, sourcePrecedence[] }
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members   WorkspaceMember[]
+  projects  Project[]
+  companies Company[]
+  aiRuns    AiRun[]
+
+  @@map("workspaces")
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+model WorkspaceMember {
+  id          String        @id @default(uuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@map("workspace_members")
+}
+
+// ─── Projects & ICP ──────────────────────────────────────────
+
+enum ProjectStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model Project {
+  id          String        @id @default(uuid())
+  workspaceId String
+  name        String
+  description String?
+  status      ProjectStatus @default(DRAFT)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  icpProfiles  IcpProfile[]
+  dataSources  DataSource[]
+  companies    Company[]
+  prospects    Prospect[]
+  workflowRuns WorkflowRun[]
+  campaigns    Campaign[]
+  messages     Message[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@map("projects")
+}
+
+enum IcpStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model IcpProfile {
+  id                String    @id @default(uuid())
+  projectId         String
+  version           Int
+  status            IcpStatus @default(DRAFT)
+  naturalLanguage   String
+  definition        Json
+  chatTranscript    Json      @default("[]")
+  // Activation guard: service refuses ACTIVE while any BLOCKING clarification has resolvedBy != USER.
+  blockingOpenCount Int       @default(0)
+  createdById       String?
+  activatedAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy    User?         @relation("icpCreatedBy", fields: [createdById], references: [id])
+  prospects    Prospect[]
+  workflowRuns WorkflowRun[]
+
+  @@unique([projectId, version])
+  @@index([projectId, status])
+  @@map("icp_profiles")
+}
+
+// ─── Data sources & raw records ──────────────────────────────
+
+enum DataSourceType {
+  CSV
+  API
+}
+
+enum DataSourceStatus {
+  DRAFT
+  READY
+  SYNCING
+  SYNCED
+  ERROR
+  ARCHIVED
+}
+
+model DataSource {
+  id           String           @id @default(uuid())
+  projectId    String
+  type         DataSourceType
+  providerKey  String
+  name         String
+  config       Json             @default("{}")
+  status       DataSourceStatus @default(DRAFT)
+  lastSyncedAt DateTime?
+  recordCount  Int              @default(0)
+  lastError    String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceRecords SourceRecord[]
+
+  @@index([projectId])
+  @@map("data_sources")
+}
+
+model SourceRecord {
+  id                  String   @id @default(uuid())
+  dataSourceId        String
+  externalId          String?
+  rawPayload          Json
+  payloadHash         String
+  fetchedAt           DateTime @default(now())
+  normalizedCompanyId String?
+  normalizationError  String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  dataSource        DataSource         @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+  normalizedCompany Company?           @relation(fields: [normalizedCompanyId], references: [id])
+  attributes        CompanyAttribute[]
+
+  @@unique([dataSourceId, payloadHash])
+  @@index([dataSourceId])
+  @@index([normalizedCompanyId])
+  @@map("source_records")
+}
+
+// ─── Canonical company + provenance ledger ───────────────────
+
+model Company {
+  id          String  @id @default(uuid())
+  workspaceId String
+  projectId   String
+  name        String
+  domain      String?
+  website     String?
+  linkedinUrl String?
+
+  industry        String?
+  industryRaw     String?
+  subIndustry     String?
+  description     String?
+  country         String?
+  hqCity          String?
+  hqState         String?
+  employeeCount   Int?
+  employeeRange   String?
+  revenueUsd      BigInt?
+  revenueRange    String?
+  foundedYear     Int?
+  fundingStage    String?
+  totalFundingUsd BigInt?
+  lastFundingDate DateTime?
+  techStack       String[]  @default([])
+
+  canonical              Json      @default("{}")
+  canonicalSchemaVersion Int       @default(1)
+  resolvedHash           String?
+  possibleDuplicate      Boolean   @default(false)
+  normalizedAt           DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  workspace      Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project        Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceRecords  SourceRecord[]
+  attributes     CompanyAttribute[]
+  people         Person[]
+  prospects      Prospect[]
+  enrichmentRuns EnrichmentRun[]
+  messages       Message[]
+
+  @@unique([projectId, domain])
+  @@index([workspaceId])
+  @@index([projectId, name])
+  @@map("companies")
+}
+
+enum AttributeSourceType {
+  SOURCE
+  ENRICHMENT
+  MANUAL
+  NORMALIZER
+  AI
+}
+
+// Append-only observation ledger. No uniqueness on (company, field, provider): history is preserved.
+model CompanyAttribute {
+  id              String              @id @default(uuid())
+  companyId       String
+  field           String
+  value           Json
+  sourceType      AttributeSourceType
+  providerKey     String
+  sourceRecordId  String?
+  enrichmentRunId String?
+  confidence      Int                 @default(100)
+  observedAt      DateTime            @default(now())
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sourceRecord  SourceRecord?  @relation(fields: [sourceRecordId], references: [id])
+  enrichmentRun EnrichmentRun? @relation(fields: [enrichmentRunId], references: [id])
+  evidence      Evidence[]
+
+  @@index([companyId, field, observedAt(sort: Desc)])
+  @@index([companyId, providerKey, observedAt(sort: Desc)])
+  @@index([enrichmentRunId])
+  @@map("company_attributes")
+}
+
+// Authoritative contact store. dedupeKey = email:<lower> | name:<normalized name>|<normalized title>
+model Person {
+  id          String   @id @default(uuid())
+  companyId   String
+  dedupeKey   String
+  fullName    String
+  title       String?
+  seniority   String?
+  department  String?
+  email       String?
+  phone       String?
+  linkedinUrl String?
+  providerKey String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@unique([companyId, dedupeKey])
+  @@index([companyId])
+  @@map("people")
+}
+
+// ─── Qualification ───────────────────────────────────────────
+
+enum ProspectStatus {
+  PENDING
+  QUALIFIED
+  DISQUALIFIED
+  NEEDS_REVIEW
+}
+
+model Prospect {
+  id            String         @id @default(uuid())
+  projectId     String
+  workflowRunId String
+  companyId     String
+  icpProfileId  String
+  status        ProspectStatus @default(PENDING)
+  // nullable 0-100; null when no criterion has a KNOWN verdict (then coverage = 0, status = NEEDS_REVIEW)
+  score         Int?
+  coverage      Int?
+  summary       Json           @default("{}")
+  aiReasoning   String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  project     Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workflowRun WorkflowRun           @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+  company     Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  icpProfile  IcpProfile            @relation(fields: [icpProfileId], references: [id])
+  results     QualificationResult[]
+  messages    Message[]
+
+  @@unique([workflowRunId, companyId])
+  @@index([projectId, status])
+  @@index([projectId, score])
+  @@map("prospects")
+}
+
+enum CriterionStatus {
+  PASS
+  FAIL
+  UNKNOWN
+}
+
+enum Evaluator {
+  DETERMINISTIC
+  LLM
+}
+
+enum QualificationPhase {
+  INITIAL
+  POST_ENRICHMENT
+}
+
+model QualificationResult {
+  id             String             @id @default(uuid())
+  prospectId     String
+  criterionId    String
+  criterionLabel String
+  phase          QualificationPhase
+  status         CriterionStatus
+  weight         Int
+  required       Boolean
+  evaluator      Evaluator
+  reason         String
+  confidence     Int?
+  missingFields  String[]           @default([])
+  aiRunId        String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  prospect Prospect   @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  aiRun    AiRun?     @relation(fields: [aiRunId], references: [id])
+  evidence Evidence[]
+
+  @@unique([prospectId, criterionId, phase])
+  @@index([prospectId])
+  @@map("qualification_results")
+}
+
+enum EvidenceKind {
+  FIELD_VALUE
+  TEXT_SNIPPET
+  URL
+  JOB_POSTING
+  NEWS_ITEM
+}
+
+model Evidence {
+  id                    String       @id @default(uuid())
+  qualificationResultId String
+  companyAttributeId    String?
+  kind                  EvidenceKind
+  content               Json
+  sourceRef             String?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  qualificationResult QualificationResult @relation(fields: [qualificationResultId], references: [id], onDelete: Cascade)
+  companyAttribute    CompanyAttribute?   @relation(fields: [companyAttributeId], references: [id])
+
+  @@index([qualificationResultId])
+  @@map("evidence")
+}
+
+// ─── Enrichment ──────────────────────────────────────────────
+
+enum EnrichmentStatus {
+  PENDING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+  SKIPPED
+}
+
+model EnrichmentRun {
+  id                String           @id @default(uuid())
+  companyId         String
+  workflowRunId     String?
+  providerKey       String
+  requestedFields   String[]
+  suppliedFields    String[]         @default([])
+  unavailableFields String[]         @default([])
+  status            EnrichmentStatus @default(PENDING)
+  costUnits         Int              @default(0)
+  rawResponse       Json?
+  error             String?
+  startedAt         DateTime         @default(now())
+  finishedAt        DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  company     Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  workflowRun WorkflowRun?       @relation(fields: [workflowRunId], references: [id])
+  attributes  CompanyAttribute[]
+
+  @@index([companyId])
+  @@index([workflowRunId])
+  @@map("enrichment_runs")
+}
+
+// ─── AI runs ─────────────────────────────────────────────────
+
+enum AiPurpose {
+  ICP_EXTRACTION
+  CSV_MAPPING_SUGGEST
+  QUALITATIVE_ASSESS
+  EMAIL_GENERATE
+  EMAIL_QA
+}
+
+enum AiRunStatus {
+  SUCCEEDED
+  SCHEMA_RETRY
+  FAILED
+}
+
+model AiRun {
+  id            String      @id @default(uuid())
+  workspaceId   String
+  purpose       AiPurpose
+  providerKey   String
+  model         String
+  promptKey     String
+  promptVersion Int
+  inputTokens   Int         @default(0)
+  outputTokens  Int         @default(0)
+  costUsd       Float?
+  latencyMs     Int?
+  input         Json
+  output        Json?
+  rawOutput     String?
+  status        AiRunStatus
+  error         String?
+  refType       String?
+  refId         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  workspace            Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  qualificationResults QualificationResult[]
+  generatedMessages    Message[]             @relation("generationRun")
+  qaMessages           Message[]             @relation("qaRun")
+
+  @@index([workspaceId, purpose, createdAt])
+  @@index([refType, refId])
+  @@map("ai_runs")
+}
+
+// ─── Workflow orchestration ──────────────────────────────────
+
+enum WorkflowRunStatus {
+  PENDING
+  RUNNING
+  AWAITING_REVIEW
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model WorkflowRun {
+  id            String            @id @default(uuid())
+  projectId     String
+  icpProfileId  String
+  status        WorkflowRunStatus @default(PENDING)
+  triggeredById String?
+  options       Json              @default("{}")
+  summary       Json              @default("{}")
+  currentStep   String?
+  error         String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  icpProfile     IcpProfile      @relation(fields: [icpProfileId], references: [id])
+  triggeredBy    User?           @relation("triggeredBy", fields: [triggeredById], references: [id])
+  steps          WorkflowStep[]
+  prospects      Prospect[]
+  enrichmentRuns EnrichmentRun[]
+
+  @@index([projectId, createdAt])
+  @@map("workflow_runs")
+}
+
+enum WorkflowStepKey {
+  INGEST
+  NORMALIZE
+  QUALIFY
+  ENRICH
+  REQUALIFY
+  GENERATE_EMAIL
+  QA
+  AWAIT_REVIEW
+}
+
+enum WorkflowStepStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+model WorkflowStep {
+  id            String             @id @default(uuid())
+  workflowRunId String
+  stepKey       WorkflowStepKey
+  order         Int
+  attempt       Int                @default(1)
+  status        WorkflowStepStatus @default(QUEUED)
+  inputHash     String?
+  input         Json?
+  output        Json?
+  error         String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  workflowRun WorkflowRun @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowRunId, stepKey, attempt])
+  @@index([workflowRunId, order])
+  @@map("workflow_steps")
+}
+
+// ─── Campaigns, messages, outbound ───────────────────────────
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+}
+
+model Campaign {
+  id                  String         @id @default(uuid())
+  projectId           String
+  name                String
+  status              CampaignStatus @default(DRAFT)
+  outboundProviderKey String         @default("simulated")
+  senderConfig        Json           @default("{}")
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@index([projectId])
+  @@map("campaigns")
+}
+
+enum MessageChannel {
+  EMAIL
+}
+
+enum QaStatus {
+  PENDING
+  PASS
+  WARN
+  FAIL
+}
+
+// EDITED resets qaStatus to PENDING; approve requires qaStatus in (PASS, WARN).
+// Sendable = APPROVED && qaStatus in (PASS, WARN) && sendStatus NOT_SENT.
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EDITED
+}
+
+enum SendStatus {
+  NOT_SENT
+  QUEUED
+  SENT_SIMULATED
+  SENT
+  FAILED
+}
+
+model Message {
+  id                String         @id @default(uuid())
+  projectId         String
+  campaignId        String?
+  prospectId        String?
+  companyId         String
+  personId          String?
+  channel           MessageChannel @default(EMAIL)
+  toAddress         String?
+  subject           String
+  body              String
+  generatedSubject  String
+  generatedBody     String
+  generationAiRunId String?
+  qaAiRunId         String?
+  qaStatus          QaStatus       @default(PENDING)
+  qaResult          Json?
+  reviewStatus      ReviewStatus   @default(PENDING)
+  reviewedById      String?
+  reviewedAt        DateTime?
+  reviewNote        String?
+  sendStatus        SendStatus     @default(NOT_SENT)
+  sentAt            DateTime?
+  providerMessageId String?
+  sendError         String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  campaign      Campaign? @relation(fields: [campaignId], references: [id])
+  prospect      Prospect? @relation(fields: [prospectId], references: [id])
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  person        Person?   @relation(fields: [personId], references: [id])
+  generationRun AiRun?    @relation("generationRun", fields: [generationAiRunId], references: [id])
+  qaRun         AiRun?    @relation("qaRun", fields: [qaAiRunId], references: [id])
+  reviewedBy    User?     @relation("reviewedBy", fields: [reviewedById], references: [id])
+
+  @@index([projectId, reviewStatus])
+  @@index([campaignId, sendStatus])
+  @@map("messages")
+}

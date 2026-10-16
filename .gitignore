@@ -1,0 +1,45 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# environment (never commit secrets)
+.env
+.env.*
+!.env.example
+apps/web/.env.local
+apps/web/.env*.local
+
+# local data: CSV uploads, simulated outbox
+.data/
+.uploads/
+.outbox/
+
+# build output
+dist/
+build/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# prisma
+apps/api/prisma/*.db
+apps/api/prisma/*.db-journal
+
+# logs & OS
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Claude Code local settings (machine-specific, never shared)
+.claude/settings.local.json
+
+# turbo build cache
+.turbo/
