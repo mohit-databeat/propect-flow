@@ -77,6 +77,53 @@ describe("MessagesService.generateDraft", () => {
     expect(result.id).toBe("msg1");
     expect(created).toMatchObject({ personId: "person1", toAddress: "jane@acme.com", subject: "Hi Acme", body: "Hello Jane", qaStatus: "PENDING", reviewStatus: "PENDING" });
   });
+
+  describe("reusing an existing message for the same company", () => {
+    function setup(existingSendStatus: string | null) {
+      const calls = { created: 0, updated: 0 };
+      const stored = existingSendStatus ? [{ id: "old-msg", companyId: "company1", projectId: "proj1", sendStatus: existingSendStatus }] : [];
+      const prisma = {
+        prospect: { findFirst: async () => makeProspect() },
+        message: {
+          findFirst: async ({ where }: { where: { companyId: string; projectId: string; sendStatus?: { notIn?: string[] } } }) =>
+            stored.find((m) => m.companyId === where.companyId && m.projectId === where.projectId && !where.sendStatus?.notIn?.includes(m.sendStatus)) ?? null,
+          create: async ({ data }: { data: Record<string, unknown> }) => {
+            calls.created++;
+            return { id: "new-msg", ...data };
+          },
+          update: async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+            calls.updated++;
+            return { id: where.id, ...data };
+          },
+        },
+      };
+      const ai = { generateEmail: async () => ({ data: { subject: "Hi", body: "Hello", personalizationPoints: [] }, aiRunId: "run1" }) };
+      return { calls, service: new MessagesService(prisma as never, makeProjectsStub() as never, ai as never) };
+    }
+
+    it("never overwrites a message that was already sent: it drafts a new one so send history is kept", async () => {
+      for (const sent of ["SENT_SIMULATED", "SENT", "QUEUED"]) {
+        const { calls, service } = setup(sent);
+        const result = await service.generateDraft(ws, "proj1", "prospect1");
+        expect(result.id).toBe("new-msg");
+        expect(calls).toEqual({ created: 1, updated: 0 });
+      }
+    });
+
+    it("still refreshes an existing unsent draft in place", async () => {
+      const { calls, service } = setup("NOT_SENT");
+      const result = await service.generateDraft(ws, "proj1", "prospect1");
+      expect(result.id).toBe("old-msg");
+      expect(calls).toEqual({ created: 0, updated: 1 });
+    });
+
+    it("refreshes a draft whose earlier send failed", async () => {
+      const { calls, service } = setup("FAILED");
+      const result = await service.generateDraft(ws, "proj1", "prospect1");
+      expect(result.id).toBe("old-msg");
+      expect(calls).toEqual({ created: 0, updated: 1 });
+    });
+  });
 });
 
 function makeMessage(overrides: Partial<{ qaStatus: string; reviewStatus: string }> = {}) {

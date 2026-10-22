@@ -1,6 +1,3 @@
-// Live POC schema – Tier 1 models only. Tier 2/3 models are documented in docs/schema.prisma.md
-// and are intentionally NOT present here.
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -9,8 +6,6 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
-
-// ─── Identity & tenancy ──────────────────────────────────────
 
 model User {
   id           String   @id @default(uuid())
@@ -22,9 +17,9 @@ model User {
   updatedAt    DateTime @updatedAt
 
   memberships  WorkspaceMember[]
-  icpProfiles  IcpProfile[]  @relation("icpCreatedBy")
-  reviewedMsgs Message[]     @relation("reviewedBy")
-  workflowRuns WorkflowRun[] @relation("triggeredBy")
+  icpProfiles  IcpProfile[]      @relation("icpCreatedBy")
+  reviewedMsgs Message[]         @relation("reviewedBy")
+  workflowRuns WorkflowRun[]     @relation("triggeredBy")
 
   @@map("users")
 }
@@ -33,8 +28,6 @@ model Workspace {
   id        String   @id @default(uuid())
   name      String
   slug      String   @unique
-  // Provider selection for the POC. Credentials come from environment variables.
-  // { aiProviderKey, enrichmentProviderKey, outboundProviderKey, sourcePrecedence[] }
   settings  Json     @default("{}")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -68,8 +61,6 @@ model WorkspaceMember {
   @@map("workspace_members")
 }
 
-// ─── Projects & ICP ──────────────────────────────────────────
-
 enum ProjectStatus {
   DRAFT
   ACTIVE
@@ -93,6 +84,7 @@ model Project {
   workflowRuns WorkflowRun[]
   campaigns    Campaign[]
   messages     Message[]
+  workflows    Workflow[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
@@ -113,7 +105,6 @@ model IcpProfile {
   naturalLanguage   String
   definition        Json
   chatTranscript    Json      @default("[]")
-  // Activation guard: service refuses ACTIVE while any BLOCKING clarification has resolvedBy != USER.
   blockingOpenCount Int       @default(0)
   createdById       String?
   activatedAt       DateTime?
@@ -129,8 +120,6 @@ model IcpProfile {
   @@index([projectId, status])
   @@map("icp_profiles")
 }
-
-// ─── Data sources & raw records ──────────────────────────────
 
 enum DataSourceType {
   CSV
@@ -189,8 +178,6 @@ model SourceRecord {
   @@map("source_records")
 }
 
-// ─── Canonical company + provenance ledger ───────────────────
-
 model Company {
   id          String  @id @default(uuid())
   workspaceId String
@@ -248,7 +235,6 @@ enum AttributeSourceType {
   AI
 }
 
-// Append-only observation ledger. No uniqueness on (company, field, provider): history is preserved.
 model CompanyAttribute {
   id              String              @id @default(uuid())
   companyId       String
@@ -274,7 +260,6 @@ model CompanyAttribute {
   @@map("company_attributes")
 }
 
-// Authoritative contact store. dedupeKey = email:<lower> | name:<normalized name>|<normalized title>
 model Person {
   id          String   @id @default(uuid())
   companyId   String
@@ -298,8 +283,6 @@ model Person {
   @@map("people")
 }
 
-// ─── Qualification ───────────────────────────────────────────
-
 enum ProspectStatus {
   PENDING
   QUALIFIED
@@ -314,7 +297,6 @@ model Prospect {
   companyId     String
   icpProfileId  String
   status        ProspectStatus @default(PENDING)
-  // nullable 0-100; null when no criterion has a KNOWN verdict (then coverage = 0, status = NEEDS_REVIEW)
   score         Int?
   coverage      Int?
   summary       Json           @default("{}")
@@ -402,8 +384,6 @@ model Evidence {
   @@map("evidence")
 }
 
-// ─── Enrichment ──────────────────────────────────────────────
-
 enum EnrichmentStatus {
   PENDING
   SUCCEEDED
@@ -437,8 +417,6 @@ model EnrichmentRun {
   @@index([workflowRunId])
   @@map("enrichment_runs")
 }
-
-// ─── AI runs ─────────────────────────────────────────────────
 
 enum AiPurpose {
   ICP_EXTRACTION
@@ -486,8 +464,6 @@ model AiRun {
   @@map("ai_runs")
 }
 
-// ─── Workflow orchestration ──────────────────────────────────
-
 enum WorkflowRunStatus {
   PENDING
   RUNNING
@@ -498,28 +474,32 @@ enum WorkflowRunStatus {
 }
 
 model WorkflowRun {
-  id            String            @id @default(uuid())
-  projectId     String
-  icpProfileId  String
-  status        WorkflowRunStatus @default(PENDING)
-  triggeredById String?
-  options       Json              @default("{}")
-  summary       Json              @default("{}")
-  currentStep   String?
-  error         String?
-  startedAt     DateTime?
-  finishedAt    DateTime?
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
+  id                String            @id @default(uuid())
+  projectId         String
+  icpProfileId      String
+  status            WorkflowRunStatus @default(PENDING)
+  triggeredById     String?
+  workflowVersionId String?
+  options           Json              @default("{}")
+  summary           Json              @default("{}")
+  currentStep       String?
+  error             String?
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
 
-  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  icpProfile     IcpProfile      @relation(fields: [icpProfileId], references: [id])
-  triggeredBy    User?           @relation("triggeredBy", fields: [triggeredById], references: [id])
-  steps          WorkflowStep[]
-  prospects      Prospect[]
-  enrichmentRuns EnrichmentRun[]
+  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  icpProfile      IcpProfile        @relation(fields: [icpProfileId], references: [id])
+  triggeredBy     User?             @relation("triggeredBy", fields: [triggeredById], references: [id])
+  workflowVersion WorkflowVersion?  @relation(fields: [workflowVersionId], references: [id], onDelete: SetNull)
+  steps           WorkflowStep[]
+  nodeRuns        WorkflowNodeRun[]
+  prospects       Prospect[]
+  enrichmentRuns  EnrichmentRun[]
 
   @@index([projectId, createdAt])
+  @@index([workflowVersionId])
   @@map("workflow_runs")
 }
 
@@ -565,8 +545,6 @@ model WorkflowStep {
   @@map("workflow_steps")
 }
 
-// ─── Campaigns, messages, outbound ───────────────────────────
-
 enum CampaignStatus {
   DRAFT
   ACTIVE
@@ -602,8 +580,6 @@ enum QaStatus {
   FAIL
 }
 
-// EDITED resets qaStatus to PENDING; approve requires qaStatus in (PASS, WARN).
-// Sendable = APPROVED && qaStatus in (PASS, WARN) && sendStatus NOT_SENT.
 enum ReviewStatus {
   PENDING
   APPROVED
@@ -659,4 +635,81 @@ model Message {
   @@index([projectId, reviewStatus])
   @@index([campaignId, sendStatus])
   @@map("messages")
+}
+
+enum WorkflowStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+model Workflow {
+  id              String         @id @default(uuid())
+  projectId       String
+  name            String
+  description     String?
+  status          WorkflowStatus @default(ACTIVE)
+  draftDefinition Json
+  draftChecksum   String
+  createdById     String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  project  Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versions WorkflowVersion[]
+
+  @@unique([projectId, name])
+  @@index([projectId, status])
+  @@map("workflows")
+}
+
+model WorkflowVersion {
+  id            String   @id @default(uuid())
+  workflowId    String
+  version       Int
+  schemaVersion Int      @default(1)
+  definition    Json
+  checksum      String
+  note          String?
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  workflow Workflow      @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  runs     WorkflowRun[]
+
+  @@unique([workflowId, version])
+  @@unique([workflowId, checksum])
+  @@map("workflow_versions")
+}
+
+enum WorkflowNodeRunStatus {
+  QUEUED
+  RUNNING
+  WAITING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+model WorkflowNodeRun {
+  id            String                @id @default(uuid())
+  workflowRunId String
+  nodeId        String
+  nodeType      String
+  attempt       Int                   @default(1)
+  status        WorkflowNodeRunStatus @default(QUEUED)
+  input         Json?
+  outputs       Json?
+  summary       Json                  @default("{}")
+  logs          Json                  @default("[]")
+  error         String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  workflowRun WorkflowRun @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowRunId, nodeId, attempt])
+  @@index([workflowRunId, status])
+  @@map("workflow_node_runs")
 }

@@ -48,7 +48,7 @@ export class WorkflowService {
 
   async list(ws: WorkspaceContext, projectId: string): Promise<WorkflowRunSummary[]> {
     await this.projects.findOneOrThrow(ws, projectId);
-    const runs = await this.prisma.workflowRun.findMany({ where: { projectId }, orderBy: { createdAt: "desc" }, include: { steps: { orderBy: { order: "asc" } } } });
+    const runs = await this.prisma.workflowRun.findMany({ where: { projectId, workflowVersionId: null }, orderBy: { createdAt: "desc" }, include: { steps: { orderBy: { order: "asc" } } } });
     return runs.map(toSummary);
   }
 
@@ -89,7 +89,7 @@ export class WorkflowService {
 
   private async findOneOrThrow(ws: WorkspaceContext, projectId: string, runId: string): Promise<WorkflowRun & { steps: WorkflowStep[] }> {
     await this.projects.findOneOrThrow(ws, projectId);
-    const run = await this.prisma.workflowRun.findFirst({ where: { id: runId, projectId }, include: { steps: { orderBy: { order: "asc" } } } });
+    const run = await this.prisma.workflowRun.findFirst({ where: { id: runId, projectId, workflowVersionId: null }, include: { steps: { orderBy: { order: "asc" } } } });
     if (!run) throw notFound("Workflow run");
     return run;
   }

@@ -89,6 +89,27 @@ Phase column shows when each endpoint is implemented.
 | POST | `/projects/:id/workflow-runs/:runId/cancel` | Cooperative cancel between steps |
 | POST | `/projects/:id/workflow-runs/:runId/retry` | Re-run from first FAILED step (idempotent steps are skipped) |
 
+## workflow builder
+
+Classic `/workflow-runs` endpoints above list and act on classic runs only (`workflowVersionId = null`). Builder runs are reached through the endpoints below. All require auth and workspace membership, and every id is checked against the project.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/projects/:id/workflows` | Active workflows with node count and latest published version |
+| POST | `/projects/:id/workflows` | `{ name, description?, template?: EMPTY or DEFAULT_PROSPECTING }`. **409 `WORKFLOW_NAME_TAKEN`** |
+| GET | `/projects/:id/workflows/:workflowId` | Detail with the editable draft definition |
+| PATCH | `/projects/:id/workflows/:workflowId` | Save name, description or draft. A draft may be incomplete; it is only validated on validate, publish and run. **409 `WORKFLOW_ARCHIVED`** |
+| DELETE | `/projects/:id/workflows/:workflowId` | Archive (204). Versions and runs are kept |
+| POST | `/projects/:id/workflows/:workflowId/validate` | `{ definition? }` -> `{ valid, issues[] }`. Uses the saved draft when no definition is posted |
+| GET | `/projects/:id/workflows/:workflowId/versions` | Published versions, newest first |
+| POST | `/projects/:id/workflows/:workflowId/versions` | Publish: validate the draft and create an immutable version. Returns the existing version with `alreadyPublished: true` when nothing changed. **400 `WORKFLOW_INVALID`** with `details` = issues |
+| POST | `/projects/:id/workflows/:workflowId/executions` | `{ versionId, maxLlmProspects? }` -> `202 { runId }`. The version is required; there is no implicit latest |
+| GET | `/projects/:id/workflows/:workflowId/executions` | Recent runs of this workflow |
+| GET | `/projects/:id/workflow-executions/:runId` | Run, pinned definition, and every node attempt with status, counts, summary and logs (polled by UI) |
+| POST | `/projects/:id/workflow-executions/:runId/cancel` | Cancel. Waiting and queued steps become SKIPPED. **409 `WORKFLOW_RUN_NOT_ACTIVE`** |
+| POST | `/projects/:id/workflow-executions/:runId/retry` | Retry the failed step as a new attempt. Finished steps are not rerun. **409 `WORKFLOW_RUN_NOT_RETRYABLE`** |
+| POST | `/projects/:id/workflow-executions/:runId/nodes/:nodeId/resume` | Resume a Human Approval step after review. **409 `REVIEW_INCOMPLETE`** while emails are undecided, **409 `WORKFLOW_NODE_NOT_WAITING`** if already resumed |
+
 ## prospects (Phase 4, enrichment actions Phase 5)
 
 | Method | Path | Purpose |
@@ -165,6 +186,13 @@ sendable            =  reviewStatus APPROVED && qaStatus in (PASS, WARN) && send
 | `DATA_SOURCE_NOT_READY` | 409 | Sync before mapping confirmed, or source ARCHIVED |
 | `MAPPING_INVALID` | 422 | `identity.name` not mapped or duplicate targets |
 | `QA_NOT_PASSED` | 409 | Approve while `qaStatus` is PENDING or FAIL |
+| `WORKFLOW_NAME_TAKEN` | 409 | A workflow with this name already exists in the project |
+| `WORKFLOW_ARCHIVED` | 409 | Editing, publishing or running an archived workflow |
+| `WORKFLOW_INVALID` | 400 | Publish or run of a definition with validation issues (`details` lists them) |
+| `WORKFLOW_RUN_NOT_ACTIVE` | 409 | Cancel of a run that already finished |
+| `WORKFLOW_RUN_NOT_RETRYABLE` | 409 | Retry of a run that is not failed, or a step already retried |
+| `WORKFLOW_NODE_NOT_WAITING` | 409 | Resume of a step that is not waiting or was already resumed |
+| `REVIEW_INCOMPLETE` | 409 | Resume while emails still await a decision |
 | `MESSAGE_NOT_SENDABLE` | 409 | Send attempt on a message that is not APPROVED with QA PASS/WARN |
 | `PROVIDER_NOT_FOUND` | 404 | Unknown provider key |
 | `PROVIDER_UNAVAILABLE` | 409 | Provider is a documented stub (`available: false`); credentials do not change this |

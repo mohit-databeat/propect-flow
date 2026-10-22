@@ -908,3 +908,13 @@ model UnmappedTerm {
 ```
 
 POC substitutes: provider credentials via `APOLLO_API_KEY`, `ANTHROPIC_API_KEY`, `SMTP_*` environment variables; provider selection via `Workspace.settings`; contact detail via `Person.email` / `Person.phone`; unmapped terms via a structured `warn` log line `{ event: "dictionary.unmapped", dictionary, rawValue }`.
+
+## Workflow builder models (live in `apps/api/prisma/schema.prisma`)
+
+Added by migration `workflow_builder`. Additive only: three tables, two enums and one nullable column on `workflow_runs`.
+
+- `workflows`: project-scoped. Holds the editable `draftDefinition` and its checksum. Unique on `(projectId, name)`. Archived, never deleted, because versions and runs refer to it.
+- `workflow_versions`: immutable published snapshots of a validated definition. Unique on `(workflowId, version)` and on `(workflowId, checksum)`, so publishing an unchanged draft returns the existing version.
+- `workflow_runs.workflowVersionId`: null for classic runs, set for builder runs. Builder runs reuse `workflow_runs` so prospects, enrichment runs and analytics keep working unchanged.
+- `workflow_node_runs`: one row per node per attempt. Unique on `(workflowRunId, nodeId, attempt)`, which makes retry a new row and prevents two retries of the same attempt. Holds item id lists, a counts-only summary and a transition log. It never holds email bodies, provider payloads or credentials.
+- Node states: `QUEUED, RUNNING, WAITING, SUCCEEDED, FAILED, SKIPPED`. Run states reuse `WorkflowRunStatus`; `AWAITING_REVIEW` is the waiting-for-approval state.

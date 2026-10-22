@@ -189,3 +189,33 @@ describe("WorkflowService.cancel", () => {
     expect(prisma.__steps(runId).every((s) => s.status === "SKIPPED")).toBe(true);
   });
 });
+
+describe("WorkflowService only exposes classic runs", () => {
+  function makeSpyService(run: object | null) {
+    const prisma = {
+      workflowRun: {
+        findMany: jest.fn(async () => []),
+        findFirst: jest.fn(async () => run),
+      },
+    };
+    const projects = { findOneOrThrow: async () => ({ id: "proj1", workspaceId: "ws1", status: "ACTIVE" }) };
+    return { prisma, service: new WorkflowService(prisma as never, projects as never, {} as never) };
+  }
+
+  const ws = { id: "ws1", role: "OWNER" as const };
+
+  it("lists only runs that were not started from a workflow version, so builder runs never appear as empty classic runs", async () => {
+    const { service, prisma } = makeSpyService(null);
+    await service.list(ws, "proj1");
+    expect(prisma.workflowRun.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { projectId: "proj1", workflowVersionId: null } }));
+  });
+
+  it("does not return, cancel or retry a builder run through the classic endpoints", async () => {
+    const { service, prisma } = makeSpyService(null);
+    for (const call of [() => service.get(ws, "proj1", "builder-run"), () => service.cancel(ws, "proj1", "builder-run"), () => service.retry(ws, "proj1", "builder-run")]) {
+      const err = (await call().catch((e: unknown) => e)) as AppException;
+      expect(err.code).toBe("NOT_FOUND");
+    }
+    expect(prisma.workflowRun.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "builder-run", projectId: "proj1", workflowVersionId: null } }));
+  });
+});

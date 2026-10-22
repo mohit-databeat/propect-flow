@@ -14,6 +14,7 @@ import { IcpModule } from "./modules/icp/icp.module";
 import { DataSourcesModule } from "./modules/data-sources/data-sources.module";
 import { QualificationModule } from "./modules/qualification/qualification.module";
 import { WorkflowModule } from "./modules/workflow/workflow.module";
+import { WorkflowBuilderModule } from "./modules/workflow-builder/workflow-builder.module";
 import { ProspectsModule } from "./modules/prospects/prospects.module";
 import { MessagesModule } from "./modules/messages/messages.module";
 import { OutboundModule } from "./modules/outbound/outbound.module";
@@ -33,6 +34,7 @@ import { SettingsModule } from "./modules/settings/settings.module";
     DataSourcesModule,
     QualificationModule,
     WorkflowModule,
+    WorkflowBuilderModule,
     ProspectsModule,
     MessagesModule,
     OutboundModule,

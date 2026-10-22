@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useParams } from "next/navigation";
-import { ChevronLeft, FolderKanban, MessageSquare, Database, Workflow, Users, Mail, Megaphone, BarChart3 } from "lucide-react";
+import { ChevronLeft, FolderKanban, MessageSquare, Database, Workflow, GitBranch, Users, Mail, Megaphone, BarChart3 } from "lucide-react";
 import type { ProjectSummary } from "@prospect/shared";
 import { api } from "../../../../lib/api";
 import { Badge } from "../../../../components/ui/badge";
@@ -14,6 +14,7 @@ const TABS = [
   { key: "icp", label: "ICP", icon: MessageSquare },
   { key: "data-sources", label: "Data Sources", icon: Database },
   { key: "workflow", label: "Workflow", icon: Workflow },
+  { key: "workflows", label: "Workflow Builder", icon: GitBranch },
   { key: "prospects", label: "Prospects", icon: Users },
   { key: "emails", label: "Emails", icon: Mail },
   { key: "campaigns", label: "Campaigns", icon: Megaphone },
@@ -49,7 +50,7 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
       <nav className="mb-6 flex gap-1 border-b border-slate-200">
         {TABS.map((tab) => {
           const href = `/projects/${params.id}/${tab.key}`;
-          const active = pathname?.startsWith(href);
+          const active = pathname === href || pathname?.startsWith(`${href}/`);
           const Icon = tab.icon;
           return (
             <Link

@@ -141,7 +141,9 @@ export class MessagesService {
     };
     const { data, aiRunId } = await this.ai.generateEmail({ workspaceId: project.workspaceId, projectId }, request, prospectId);
 
-    const existing = await this.prisma.message.findFirst({ where: { companyId: prospect.companyId, projectId } });
+    const existing = await this.prisma.message.findFirst({
+      where: { companyId: prospect.companyId, projectId, sendStatus: { notIn: ["QUEUED", "SENT_SIMULATED", "SENT"] } },
+    });
     const messageData = {
       projectId,
       prospectId,
